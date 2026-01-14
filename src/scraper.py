@@ -5,8 +5,8 @@ Scraper de Sales Navigator con medidas anti-detección
 import random
 import time
 from playwright.sync_api import sync_playwright
+# REVERTIDO: Usamos la clase Stealth tal como la tenías originalmente
 from playwright_stealth import Stealth
-
 
 class MeridianScraper:
     
@@ -39,19 +39,13 @@ class MeridianScraper:
 
     def get_profiles(self, search_url, max_pages=3):
         """
-        Extrae perfiles de Sales Navigator de forma segura.
-        
-        Args:
-            search_url: URL de búsqueda de Sales Navigator
-            max_pages: Número máximo de páginas a scrapear (default: 3)
-        
-        Returns:
-            Lista de textos de perfiles extraídos
+        Extrae perfiles de Sales Navigator.
+        Returns: Lista de diccionarios {'text': str, 'url': str}
         """
         all_results = []
         
         with sync_playwright() as p:
-            # Iniciar navegador persistente (mantiene sesión)
+            # Iniciar navegador persistente
             context = p.chromium.launch_persistent_context(
                 self.user_data_dir,
                 headless=False,
@@ -68,7 +62,7 @@ class MeridianScraper:
             
             page = context.new_page()
             
-            # Aplicar stealth
+            # REVERTIDO: Aplicamos Stealth con tu método original
             Stealth().apply_stealth_sync(page)
             
             try:
@@ -88,9 +82,9 @@ class MeridianScraper:
                     # Navegar
                     page.goto(current_url, wait_until="domcontentloaded")
                     
-                    # Espera inicial (más larga en primera página para login manual)
+                    # Espera inicial
                     if page_num == 1:
-                        print("   ⏳ Esperando carga inicial (20s para login si es necesario)...")
+                        print("   ⏳ Esperando carga inicial (20s para login)...")
                         page.wait_for_timeout(20000)
                     else:
                         wait_time = random.randint(
@@ -100,7 +94,6 @@ class MeridianScraper:
                         print(f"   ⏳ Esperando {wait_time/1000:.1f}s...")
                         page.wait_for_timeout(wait_time)
                     
-                    # Scroll humano para cargar contenido dinámico
                     print("   📜 Scrolling...")
                     self._human_scroll(page)
                     
@@ -108,20 +101,38 @@ class MeridianScraper:
                     profile_cards = page.query_selector_all('.artdeco-entity-lockup')
                     
                     if len(profile_cards) == 0:
-                        # Intentar selector alternativo
                         profile_cards = page.query_selector_all('[data-x--lead-card]')
                     
                     if len(profile_cards) == 0:
-                        print("   ⚠️ No se encontraron perfiles. Posible fin de resultados.")
+                        print("   ⚠️ No se encontraron perfiles. Posible fin.")
                         break
                     
                     print(f"   📦 Perfiles encontrados: {len(profile_cards)}")
                     
                     for card in profile_cards:
                         try:
+                            # Texto completo para análisis
                             text = card.inner_text()
+                            
+                            # Extraer Link del perfil
+                            # Buscamos el enlace principal del nombre
+                            link_el = card.query_selector('a[data-control-name="view_lead_panel_via_search_result"]')
+                            if not link_el:
+                                link_el = card.query_selector('.artdeco-entity-lockup__title a')
+                            
+                            profile_url = ""
+                            if link_el:
+                                href = link_el.get_attribute('href')
+                                if href:
+                                    # Limpiamos query params para dejar la URL limpia
+                                    profile_url = f"https://www.linkedin.com{href.split('?')[0]}"
+
                             if text and len(text) > 20:
-                                all_results.append(text)
+                                # Devolvemos diccionario con texto Y url
+                                all_results.append({
+                                    "text": text,
+                                    "url": profile_url
+                                })
                         except:
                             continue
                     
@@ -131,7 +142,7 @@ class MeridianScraper:
                             self.SAFE_CONFIG["min_wait_page"],
                             self.SAFE_CONFIG["max_wait_page"]
                         )
-                        print(f"   😴 Pausa de {delay:.1f}s antes de siguiente página...")
+                        print(f"   😴 Pausa de {delay:.1f}s...")
                         
             except Exception as e:
                 print(f"❌ Error durante scraping: {e}")

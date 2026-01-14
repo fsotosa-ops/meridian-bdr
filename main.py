@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 """
-MERIDIAN-BDR v2.0
-Agente de prospección automatizado para BDRs
-
-Uso:
-    python main.py scrape     # Extrae de Sales Navigator
-    python main.py research   # Investiga y califica
-    python main.py full       # Ejecuta todo
-    python main.py status     # Muestra estado actual
+MERIDIAN-BDR v2.5
+Agente de prospección automatizado para BDRs con UUID y Trazabilidad
 """
 
 import os
 import sys
+import time
+import hashlib
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -23,13 +19,15 @@ from src.notifier import EmailNotifier
 
 load_dotenv()
 
+def generate_lead_id(name, company):
+    """Genera un ID único y constante basado en nombre y empresa para evitar duplicados"""
+    raw_string = f"{name.lower().strip()}|{company.lower().strip()}"
+    return hashlib.md5(raw_string.encode()).hexdigest()[:12]
 
 def get_config(sheets):
     """Lee toda la configuración del Sheet"""
     config = {}
-    
     try:
-        # Leer configuración (B2:B7)
         icp = sheets.read_range("Config!B2")
         config['icp'] = icp[0][0] if icp and icp[0] else ""
         
@@ -45,9 +43,6 @@ def get_config(sheets):
         max_leads = sheets.read_range("Config!B6")
         config['max_leads_day'] = int(max_leads[0][0]) if max_leads and max_leads[0] else 50
         
-        auto_run = sheets.read_range("Config!B7")
-        config['auto_run'] = auto_run[0][0].lower() == "sí" if auto_run and auto_run[0] else False
-        
     except Exception as e:
         print(f"⚠️ Error leyendo config, usando defaults: {e}")
         config = {
@@ -55,21 +50,18 @@ def get_config(sheets):
             'research_queries': "{company} importador México",
             'sales_nav_url': os.getenv("SALES_NAV_LIST_URL"),
             'max_pages': 3,
-            'max_leads_day': 50,
-            'auto_run': False
+            'max_leads_day': 50
         }
-    
     return config
 
 
 def update_last_run(sheets):
-    """Actualiza timestamp de última ejecución"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     sheets.update_cell("Config!B8", now)
 
 
 def scrape_and_save():
-    """Paso 1: Extrae de Sales Navigator y guarda en Sheets"""
+    """Paso 1: Extrae de Sales Navigator con UUID Hash, Upsert y Paginación"""
     print("\n" + "="*60)
     print("🕵️  PASO 1: EXTRACCIÓN DE SALES NAVIGATOR")
     print("="*60)
@@ -81,50 +73,80 @@ def scrape_and_save():
     search_url = config['sales_nav_url']
     if not search_url:
         print("❌ ERROR: No se encontró URL de Sales Navigator")
-        print("   Configúrala en Config!B4 o en el archivo .env")
         return 0
     
     scraper = MeridianScraper()
     brain = MeridianBrain()
     
-    print(f"📋 Configuración:")
-    print(f"   • Max páginas: {config['max_pages']}")
-    print(f"   • Max leads/día: {config['max_leads_day']}")
-    print(f"   • URL: {search_url[:50]}...")
+    # 1. LEER IDs EXISTENTES (Columna A)
+    existing_data = sheets.read_range("Leads!A2:A") 
+    existing_ids = set()
+    if existing_data:
+        for row in existing_data:
+            if row: existing_ids.add(row[0])
+            
+    print(f"📊 Leads existentes en base de datos: {len(existing_ids)}")
+    print(f"📋 Configuración: Max páginas: {config['max_pages']} | Max nuevos/día: {config['max_leads_day']}")
     
-    # Extraer perfiles
-    raw_profiles = scraper.get_profiles(search_url, max_pages=config['max_pages'])
-    print(f"\n📦 Se encontraron {len(raw_profiles)} perfiles")
+    # Extraer perfiles (recibe lista de dicts con url)
+    raw_profiles_data = scraper.get_profiles(search_url, max_pages=config['max_pages'])
+    print(f"\n📦 Se encontraron {len(raw_profiles_data)} perfiles brutos")
     
-    # Limitar por día
-    profiles_to_process = raw_profiles[:config['max_leads_day']]
     saved_count = 0
     
-    for raw_text in profiles_to_process:
-        analysis = brain.extract_profile_info(raw_text)
-        
-        if analysis and analysis.get('name'):
-            print(f"   💾 {analysis.get('name', 'N/A')} - {analysis.get('company', 'N/A')}")
+    for item in raw_profiles_data:
+        if saved_count >= config['max_leads_day']:
+            print("🛑 Límite diario alcanzado.")
+            break
             
-            row = [
-                datetime.now().strftime("%Y-%m-%d"),
-                analysis.get('name', ''),
-                analysis.get('role', ''),
-                analysis.get('company', ''),
-                "Sales Navigator",
-                "",  # Score
-                "",  # Fit
-                "",  # Razón
-                "",  # Info Importaciones
-                "",  # Fuentes/URLs
-                "🔄 Pendiente",  # Status
-                ""   # Notas BDR
-            ]
-            sheets.append_row("Leads!A2", row)
-            saved_count += 1
+        time.sleep(2) 
+        
+        try:
+            raw_text = item['text']
+            profile_url = item['url']
+            
+            analysis = brain.extract_profile_info(raw_text)
+            
+            if analysis and analysis.get('name'):
+                name = analysis.get('name', '').strip()
+                company = analysis.get('company', '')
+                role = analysis.get('role', '')
+                
+                # GENERAR ID DETERMINÍSTICO (Hash)
+                lead_id = generate_lead_id(name, company)
+                
+                # CHECK DUPLICADOS POR ID
+                if lead_id in existing_ids:
+                    print(f"   ⚠️ Duplicado saltado (ID existente): {name}")
+                    continue
+                
+                print(f"   💾 Nuevo [{lead_id}]: {name} - {company}")
+                
+                row = [
+                    lead_id,         # A: ID Hash
+                    datetime.now().strftime("%Y-%m-%d"), # B
+                    name,            # C
+                    role,            # D
+                    company,         # E
+                    "Sales Navigator", # F: Fuente
+                    "",              # G: Score
+                    "",              # H: Fit
+                    "",              # I: Razón
+                    "",              # J: Info
+                    profile_url,     # K: URL Perfil (Nueva columna)
+                    "🔄 Pendiente",  # L: Status
+                    ""               # M: Notas
+                ]
+                sheets.append_row("Leads!A2", row)
+                saved_count += 1
+                existing_ids.add(lead_id)
+                
+        except Exception as e:
+            print(f"      ❌ Error procesando perfil: {e}")
+            continue
     
     update_last_run(sheets)
-    print(f"\n✅ Paso 1 completado: {saved_count} leads guardados")
+    print(f"\n✅ Paso 1 completado: {saved_count} nuevos leads guardados")
     return saved_count
 
 
@@ -141,18 +163,16 @@ def research_and_evaluate():
     researcher = CompanyResearcherAPI()
     brain = MeridianBrain()
     
-    print(f"📋 ICP: {config['icp'][:80]}...")
-    print(f"🔍 Queries: {config['research_queries'][:60]}...")
-    
-    # Leer leads pendientes
-    leads = sheets.read_range("Leads!A2:L500")
-    
+    # Leemos rango ampliado para incluir ID en col A
+    # A=ID, B=Fecha, C=Nombre... L=Status
+    leads = sheets.read_range("Leads!A2:M500")
     if not leads:
         print("📭 No hay leads para investigar")
         return [], 0, 0
     
+    # Filtramos por status "Pendiente" que está en la columna L (índice 11)
     pending = [i for i, row in enumerate(leads) 
-               if len(row) > 10 and "Pendiente" in row[10]]
+               if len(row) > 11 and "Pendiente" in row[11]]
     
     print(f"📊 Leads pendientes: {len(pending)}")
     
@@ -161,101 +181,86 @@ def research_and_evaluate():
     discarded = 0
     
     for i in pending:
+        time.sleep(1) # Pausa seguridad
+        
         row = leads[i]
+        # Índices desplazados por el ID
+        lead_id = row[0] if len(row) > 0 else "N/A"
+        name = row[2] if len(row) > 2 else ""
+        role = row[3] if len(row) > 3 else ""
+        company = row[4] if len(row) > 4 else ""
         
-        company = row[3] if len(row) > 3 else ""
-        name = row[1] if len(row) > 1 else ""
-        role = row[2] if len(row) > 2 else ""
+        if not company: continue
         
-        if not company:
-            continue
+        print(f"\n🔍 [{processed+1}/{len(pending)}] ID:{lead_id[:6]}... {company}")
         
-        print(f"\n🔍 [{processed+1}/{len(pending)}] {company}")
-        
-        # Investigar (ahora retorna tuple con URLs)
+        # Investigar
         import_info, urls = researcher.search_import_data(company, config['research_queries'])
-        
-        # Formatear URLs para el Sheet (máximo 3)
         urls_text = "\n".join(urls[:3]) if urls else ""
         
         # Evaluar
-        full_profile = f"""
-        Nombre: {name}
-        Cargo: {role}
-        Empresa: {company}
+        full_profile = f"Nombre: {name}\nCargo: {role}\nEmpresa: {company}\nINFO:{import_info}"
         
-        INFORMACIÓN DE IMPORTACIONES:
-        {import_info}
-        """
+        time.sleep(1) # Pausa Gemini
         
-        evaluation = brain.evaluate_candidate(full_profile, config['icp'])
-        
-        if evaluation:
-            score = evaluation.get('score', 0)
-            fit = evaluation.get('fit', False)
-            reason = evaluation.get('reason', '')
+        try:
+            evaluation = brain.evaluate_candidate(full_profile, config['icp'])
             
-            # Determinar status basado en score
-            if score >= 70:
-                status = "🔍 Revisar"
-                qualified_leads.append({
-                    'name': name,
-                    'role': role,
-                    'company': company,
-                    'score': score,
-                    'reason': reason
-                })
-            elif score >= 40:
-                status = "🤔 Evaluar"
-            else:
-                status = "❌ Descartado"
-                discarded += 1
+            if evaluation:
+                score = evaluation.get('score', 0)
+                fit = evaluation.get('fit', False)
+                reason = evaluation.get('reason', '')
+                
+                if score >= 70:
+                    status = "🔍 Revisar"
+                    qualified_leads.append({
+                        'name': name,
+                        'role': role,
+                        'company': company,
+                        'score': score,
+                        'reason': reason
+                    })
+                elif score >= 40:
+                    status = "🤔 Evaluar"
+                else:
+                    status = "❌ Descartado"
+                    discarded += 1
+                
+                # Actualizar fila (Columnas G a L)
+                # G=Score, H=Fit, I=Razon, J=Info, K=URLs, L=Status
+                row_number = i + 2
+                sheets.update_range(f"Leads!G{row_number}:L{row_number}", [[
+                    score,
+                    "✅" if fit else "❌",
+                    reason[:200],
+                    import_info[:400],
+                    urls_text,
+                    status
+                ]])
+                
+                emoji = "✅" if fit else "❌"
+                print(f"   {emoji} Score: {score}")
+                
+        except Exception as e:
+            print(f"   ❌ Error evaluando: {e}")
             
-            # Actualizar fila (ahora incluye columna de URLs)
-            row_number = i + 2
-            sheets.update_range(f"Leads!F{row_number}:K{row_number}", [[
-                score,
-                "✅" if fit else "❌",
-                reason[:200],
-                import_info[:400],
-                urls_text,
-                status
-            ]])
-            
-            emoji = "✅" if fit else "❌"
-            print(f"   {emoji} Score: {score} - {reason[:50]}...")
-        
         processed += 1
     
     update_last_run(sheets)
     print(f"\n✅ Paso 2 completado: {processed} leads procesados")
-    
     return qualified_leads, processed, discarded
 
 
 def send_notification(qualified_leads, total, discarded):
-    """Envía notificación por email al BDR"""
     print("\n" + "="*60)
     print("📧 PASO 3: NOTIFICACIÓN")
     print("="*60)
     
     notifier = EmailNotifier()
-    
-    stats = {
-        'total': total,
-        'qualified': len(qualified_leads),
-        'discarded': discarded
-    }
-    
-    # Ordenar por score
+    stats = {'total': total, 'qualified': len(qualified_leads), 'discarded': discarded}
     qualified_leads.sort(key=lambda x: x.get('score', 0), reverse=True)
     
-    success = notifier.send_daily_summary(stats, qualified_leads)
-    
-    if success:
-        print("✅ Notificación enviada")
-    else:
-        print("⚠️ Notificación no enviada (email no configurado)")
+    notifier.send_daily_summary(stats, qualified_leads)
 
 
 def show_status():
@@ -266,88 +271,44 @@ def show_status():
     
     sheet_id = os.getenv("GOOGLE_SHEET_ID")
     sheets = SheetsInterface(sheet_id)
-    
-    # Leer leads
-    leads = sheets.read_range("Leads!A2:L500")
+    # Rango ajustado por columna ID
+    leads = sheets.read_range("Leads!A2:M500")
     
     if not leads:
         print("📭 No hay leads en el sistema")
         return
     
-    # Contar por status
-    total = len(leads)
-    pending = sum(1 for r in leads if len(r) > 10 and "Pendiente" in r[10])
-    to_review = sum(1 for r in leads if len(r) > 10 and "Revisar" in r[10])
-    to_evaluate = sum(1 for r in leads if len(r) > 10 and "Evaluar" in r[10])
-    discarded = sum(1 for r in leads if len(r) > 10 and "Descartado" in r[10])
-    to_crm = sum(1 for r in leads if len(r) > 10 and "CRM" in r[10])
+    # Status en columna L (índice 11)
+    pending = sum(1 for r in leads if len(r) > 11 and "Pendiente" in r[11])
+    qualified = sum(1 for r in leads if len(r) > 11 and "Revisar" in r[11])
     
-    print(f"""
-    📈 RESUMEN:
-    ─────────────────────────────
-    Total leads:        {total}
-    🔄 Pendientes:      {pending}
-    🔍 Para revisar:    {to_review}
-    🤔 Para evaluar:    {to_evaluate}
-    ❌ Descartados:     {discarded}
-    ✅ Enviados a CRM:  {to_crm}
-    ─────────────────────────────
-    """)
-    
-    # Top leads
-    high_score = [(r[1], r[3], r[5]) for r in leads 
-                  if len(r) > 5 and r[5] and str(r[5]).isdigit() and int(r[5]) >= 70]
-    
-    if high_score:
-        print("    🏆 TOP LEADS (Score ≥70):")
-        for name, company, score in high_score[:5]:
-            print(f"       • {name} @ {company}: {score}")
+    print(f"Total leads: {len(leads)} | Pendientes: {pending} | Calificados: {qualified}")
 
 
 def run_full():
-    """Ejecuta pipeline completo"""
-    print("\n" + "="*60)
-    print("🚀 MERIDIAN-BDR - EJECUCIÓN COMPLETA")
-    print("="*60)
-    
-    # Paso 1: Scrape
+    print("\n🚀 MERIDIAN-BDR - FULL RUN")
     total_scraped = scrape_and_save()
-    
-    # Paso 2: Research
     qualified_leads, total_researched, discarded = research_and_evaluate()
     
-    # Paso 3: Notificar
     if total_researched > 0:
         send_notification(qualified_leads, total_researched, discarded)
     
-    # Mostrar status
     show_status()
-    
-    print("\n" + "="*60)
-    print("✅ PIPELINE COMPLETADO")
-    print("="*60)
+    print("\n✅ PIPELINE COMPLETADO")
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         command = sys.argv[1].lower()
-        
-        if command == "scrape":
-            scrape_and_save()
-        elif command == "research":
-            qualified_leads, total, discarded = research_and_evaluate()
-            if total > 0:
-                send_notification(qualified_leads, total, discarded)
-        elif command == "full":
-            run_full()
-        elif command == "status":
-            show_status()
+        if command == "scrape": scrape_and_save()
+        elif command == "research": 
+            q, t, d = research_and_evaluate()
+            if t > 0: send_notification(q, t, d)
+        elif command == "full": run_full()
+        elif command == "status": show_status()
         elif command == "test-email":
             from src.notifier import test_email
             test_email()
-        else:
-            print(f"❌ Comando desconocido: {command}")
-            print(__doc__)
+        else: print(f"❌ Comando desconocido: {command}")
     else:
-        print(__doc__)
-        print("\nEjemplo: python main.py full")
+        print("Uso: python main.py [scrape|research|full|status|test-email]")
