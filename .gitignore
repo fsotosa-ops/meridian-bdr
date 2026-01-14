@@ -1,0 +1,20 @@
+# Entorno Virtual (Pesa mucho)
+.venv/
+venv/
+env/
+
+# Sesión de Navegador (Playwright guarda gigas de caché aquí)
+data/browser_session/
+
+# Archivos de Seguridad (No deben estar en el repo)
+.env
+credentials.json
+token.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Mac OS files
+.DS_Store

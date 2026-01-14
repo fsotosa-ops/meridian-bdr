@@ -1,0 +1,23 @@
+# --- Core Automation ---
+# Playwright es el motor. La versión 1.49+ es muy estable para 2025/2026.
+playwright>=1.49.0
+# playwright-stealth ayuda a evadir detecciones básicas.
+playwright-stealth>=1.0.6
+
+# --- AI & Reasoning ---
+# SDK de Google Generative AI (Gemini)
+google-genai>=0.1.0
+# Pydantic v2 es estándar para validar los JSON que escupe la IA.
+pydantic>=2.7.0
+
+# --- Google Ecosystem (Sheets & Auth) ---
+# Usamos el cliente oficial. Estas tres deben ir de la mano.
+google-api-python-client>=2.150.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+
+# --- Utils ---
+# Para cargar tu API_KEY desde el archivo .env
+python-dotenv>=1.0.1
+# Para manejar las fechas de extracción y logs de forma limpia
+python-json-logger>=2.0.7
