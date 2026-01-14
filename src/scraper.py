@@ -1,6 +1,6 @@
 from playwright.sync_api import sync_playwright
-# Importamos el módulo completo para evitar conflictos de nombres
-import playwright_stealth 
+from playwright_stealth import Stealth
+
 
 class MeridianScraper:
     def __init__(self, user_data_dir="./data/browser_session"):
@@ -16,15 +16,7 @@ class MeridianScraper:
             )
             
             page = context.new_page()
-            
-            # SOLUCIÓN AL ERROR: Accedemos a la función dentro del módulo
-            # Si 'import playwright_stealth' trae el módulo, la función suele estar en .stealth
-            try:
-                playwright_stealth.stealth(page)
-            except TypeError:
-                # En algunas versiones se importa de esta otra forma
-                from playwright_stealth import stealth
-                stealth(page)
+            Stealth().apply_stealth_sync(page)
             
             print(f"🕵️ Meridian navegando a: {search_url}")
             
@@ -33,7 +25,7 @@ class MeridianScraper:
             
             # Esperamos 15 segundos para asegurar carga y login manual si hace falta
             print("Esperando carga completa...")
-            page.wait_for_timeout(15000) 
+            page.wait_for_timeout(60000) 
 
             # Scroll para cargar perfiles dinámicos
             page.mouse.wheel(0, 2000)
