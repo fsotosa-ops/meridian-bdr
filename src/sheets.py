@@ -59,3 +59,16 @@ class SheetsInterface:
             ).execute()
         except HttpError as err:
             print(f"Error escribiendo en Sheets: {err}")
+
+    def update_row(self, range_name, values):
+        """Actualiza celdas específicas"""
+        try:
+            body = {'values': [values]}
+            self.service.spreadsheets().values().update(
+                spreadsheetId=self.spreadsheet_id,
+                range=range_name,
+                valueInputOption="RAW",
+                body=body
+            ).execute()
+        except HttpError as err:
+            print(f"Error actualizando Sheets: {err}")
