@@ -29,11 +29,11 @@ class CompanyResearcherAPI:
                             Usa {company} como placeholder
         
         Returns:
-            String con resultados concatenados
+            Tuple: (info_text, urls_list)
         """
         
         if not self.api_key:
-            return "Error: API key no configurada"
+            return "Error: API key no configurada", []
         
         # Parsear queries del template
         queries = [
@@ -43,6 +43,7 @@ class CompanyResearcherAPI:
         ]
         
         all_results = []
+        all_urls = []
         
         headers = {
             "X-API-KEY": self.api_key,
@@ -77,30 +78,37 @@ class CompanyResearcherAPI:
                 for r in organic[:3]:  # Top 3 por query
                     title = r.get("title", "")
                     snippet = r.get("snippet", "")
+                    url = r.get("link", "")
                     
                     if title and snippet:
-                        # Limpiar y concatenar
                         result = f"{title}: {snippet}"
                         all_results.append(result)
+                        
+                        if url and url not in all_urls:
+                            all_urls.append(url)
                 
                 # También extraer Knowledge Graph si existe
                 knowledge = data.get("knowledgeGraph", {})
                 if knowledge:
                     kg_title = knowledge.get("title", "")
                     kg_desc = knowledge.get("description", "")
+                    kg_url = knowledge.get("website", "")
+                    
                     if kg_title and kg_desc:
                         all_results.append(f"[Info] {kg_title}: {kg_desc}")
+                    
+                    if kg_url and kg_url not in all_urls:
+                        all_urls.append(kg_url)
                         
             except requests.exceptions.Timeout:
                 print(f"      ⚠️ Timeout en búsqueda")
             except Exception as e:
                 print(f"      ❌ Error: {e}")
         
-        # Concatenar resultados
-        if all_results:
-            return " | ".join(all_results)
-        else:
-            return "Sin información encontrada en búsquedas"
+        # Preparar resultados
+        info_text = " | ".join(all_results) if all_results else "Sin información encontrada"
+        
+        return info_text, all_urls
     
     def search_company_details(self, company_name):
         """

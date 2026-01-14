@@ -19,6 +19,7 @@ from src.sheets import SheetsInterface
 from src.scraper import MeridianScraper
 from src.researcher_api import CompanyResearcherAPI
 from src.brain import MeridianBrain
+from src.notifier import EmailNotifier
 
 load_dotenv()
 
@@ -81,7 +82,7 @@ def scrape_and_save():
     if not search_url:
         print("❌ ERROR: No se encontró URL de Sales Navigator")
         print("   Configúrala en Config!B4 o en el archivo .env")
-        return
+        return 0
     
     scraper = MeridianScraper()
     brain = MeridianBrain()
@@ -115,6 +116,7 @@ def scrape_and_save():
                 "",  # Fit
                 "",  # Razón
                 "",  # Info Importaciones
+                "",  # Fuentes/URLs
                 "🔄 Pendiente",  # Status
                 ""   # Notas BDR
             ]
@@ -123,6 +125,7 @@ def scrape_and_save():
     
     update_last_run(sheets)
     print(f"\n✅ Paso 1 completado: {saved_count} leads guardados")
+    return saved_count
 
 
 def research_and_evaluate():
@@ -142,18 +145,21 @@ def research_and_evaluate():
     print(f"🔍 Queries: {config['research_queries'][:60]}...")
     
     # Leer leads pendientes
-    leads = sheets.read_range("Leads!A2:K500")
+    leads = sheets.read_range("Leads!A2:L500")
     
     if not leads:
         print("📭 No hay leads para investigar")
-        return
+        return [], 0, 0
     
     pending = [i for i, row in enumerate(leads) 
-               if len(row) > 9 and "Pendiente" in row[9]]
+               if len(row) > 10 and "Pendiente" in row[10]]
     
     print(f"📊 Leads pendientes: {len(pending)}")
     
     processed = 0
+    qualified_leads = []
+    discarded = 0
+    
     for i in pending:
         row = leads[i]
         
@@ -166,8 +172,11 @@ def research_and_evaluate():
         
         print(f"\n🔍 [{processed+1}/{len(pending)}] {company}")
         
-        # Investigar
-        import_info = researcher.search_import_data(company, config['research_queries'])
+        # Investigar (ahora retorna tuple con URLs)
+        import_info, urls = researcher.search_import_data(company, config['research_queries'])
+        
+        # Formatear URLs para el Sheet (máximo 3)
+        urls_text = "\n".join(urls[:3]) if urls else ""
         
         # Evaluar
         full_profile = f"""
@@ -184,32 +193,69 @@ def research_and_evaluate():
         if evaluation:
             score = evaluation.get('score', 0)
             fit = evaluation.get('fit', False)
+            reason = evaluation.get('reason', '')
             
             # Determinar status basado en score
             if score >= 70:
                 status = "🔍 Revisar"
+                qualified_leads.append({
+                    'name': name,
+                    'role': role,
+                    'company': company,
+                    'score': score,
+                    'reason': reason
+                })
             elif score >= 40:
                 status = "🤔 Evaluar"
             else:
                 status = "❌ Descartado"
+                discarded += 1
             
-            # Actualizar fila
+            # Actualizar fila (ahora incluye columna de URLs)
             row_number = i + 2
-            sheets.update_range(f"Leads!F{row_number}:J{row_number}", [[
+            sheets.update_range(f"Leads!F{row_number}:K{row_number}", [[
                 score,
                 "✅" if fit else "❌",
-                evaluation.get('reason', '')[:200],
+                reason[:200],
                 import_info[:400],
+                urls_text,
                 status
             ]])
             
             emoji = "✅" if fit else "❌"
-            print(f"   {emoji} Score: {score} - {evaluation.get('reason', '')[:50]}...")
+            print(f"   {emoji} Score: {score} - {reason[:50]}...")
         
         processed += 1
     
     update_last_run(sheets)
     print(f"\n✅ Paso 2 completado: {processed} leads procesados")
+    
+    return qualified_leads, processed, discarded
+
+
+def send_notification(qualified_leads, total, discarded):
+    """Envía notificación por email al BDR"""
+    print("\n" + "="*60)
+    print("📧 PASO 3: NOTIFICACIÓN")
+    print("="*60)
+    
+    notifier = EmailNotifier()
+    
+    stats = {
+        'total': total,
+        'qualified': len(qualified_leads),
+        'discarded': discarded
+    }
+    
+    # Ordenar por score
+    qualified_leads.sort(key=lambda x: x.get('score', 0), reverse=True)
+    
+    success = notifier.send_daily_summary(stats, qualified_leads)
+    
+    if success:
+        print("✅ Notificación enviada")
+    else:
+        print("⚠️ Notificación no enviada (email no configurado)")
 
 
 def show_status():
@@ -222,7 +268,7 @@ def show_status():
     sheets = SheetsInterface(sheet_id)
     
     # Leer leads
-    leads = sheets.read_range("Leads!A2:K500")
+    leads = sheets.read_range("Leads!A2:L500")
     
     if not leads:
         print("📭 No hay leads en el sistema")
@@ -230,11 +276,11 @@ def show_status():
     
     # Contar por status
     total = len(leads)
-    pending = sum(1 for r in leads if len(r) > 9 and "Pendiente" in r[9])
-    to_review = sum(1 for r in leads if len(r) > 9 and "Revisar" in r[9])
-    to_evaluate = sum(1 for r in leads if len(r) > 9 and "Evaluar" in r[9])
-    discarded = sum(1 for r in leads if len(r) > 9 and "Descartado" in r[9])
-    to_crm = sum(1 for r in leads if len(r) > 9 and "CRM" in r[9])
+    pending = sum(1 for r in leads if len(r) > 10 and "Pendiente" in r[10])
+    to_review = sum(1 for r in leads if len(r) > 10 and "Revisar" in r[10])
+    to_evaluate = sum(1 for r in leads if len(r) > 10 and "Evaluar" in r[10])
+    discarded = sum(1 for r in leads if len(r) > 10 and "Descartado" in r[10])
+    to_crm = sum(1 for r in leads if len(r) > 10 and "CRM" in r[10])
     
     print(f"""
     📈 RESUMEN:
@@ -264,8 +310,17 @@ def run_full():
     print("🚀 MERIDIAN-BDR - EJECUCIÓN COMPLETA")
     print("="*60)
     
-    scrape_and_save()
-    research_and_evaluate()
+    # Paso 1: Scrape
+    total_scraped = scrape_and_save()
+    
+    # Paso 2: Research
+    qualified_leads, total_researched, discarded = research_and_evaluate()
+    
+    # Paso 3: Notificar
+    if total_researched > 0:
+        send_notification(qualified_leads, total_researched, discarded)
+    
+    # Mostrar status
     show_status()
     
     print("\n" + "="*60)
@@ -280,11 +335,16 @@ if __name__ == "__main__":
         if command == "scrape":
             scrape_and_save()
         elif command == "research":
-            research_and_evaluate()
+            qualified_leads, total, discarded = research_and_evaluate()
+            if total > 0:
+                send_notification(qualified_leads, total, discarded)
         elif command == "full":
             run_full()
         elif command == "status":
             show_status()
+        elif command == "test-email":
+            from src.notifier import test_email
+            test_email()
         else:
             print(f"❌ Comando desconocido: {command}")
             print(__doc__)
