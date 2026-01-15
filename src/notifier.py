@@ -94,3 +94,46 @@ class EmailNotifier:
         except HttpError as error:
             print(f"❌ Error enviando notificación: {error}")
             return False
+
+# --- FUNCIÓN DE PRUEBA (FUERA DE LA CLASE) ---
+def test_email():
+    """Prueba de envío con datos falsos"""
+    print("🚀 Iniciando prueba de email...")
+    
+    # Aquí instanciamos la clase, que ya está definida arriba
+    notifier = EmailNotifier()
+    
+    # Datos simulados para probar el diseño
+    stats = {"total": 45, "qualified": 3, "discarded": 12}
+    leads = [
+        {
+            "name": "Roberto Díaz", 
+            "role": "CTO", 
+            "company": "TechLatam", 
+            "score": 92, 
+            "reason": "Stack tecnológico 100% compatible. Presupuesto Q1 aprobado para migración cloud."
+        },
+        {
+            "name": "Ana Vega", 
+            "role": "VP Engineering", 
+            "company": "SoftCorp", 
+            "score": 78, 
+            "reason": "Empresa en expansión. Ana es decisora técnica aunque el ciclo de venta puede ser largo."
+        },
+        {
+            "name": "Carlos Ruiz", 
+            "role": "DevOps Lead", 
+            "company": "StartUp X", 
+            "score": 45, 
+            "reason": "Empresa muy pequeña, probablemente sin presupuesto Enterprise."
+        }
+    ]
+    
+    result = notifier.send_daily_summary(stats, leads)
+    if result:
+        print("✅ Email de prueba enviado correctamente.")
+    else:
+        print("❌ Falló el envío del email.")
+
+if __name__ == "__main__":
+    test_email()

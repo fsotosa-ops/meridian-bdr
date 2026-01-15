@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-MERIDIAN-BDR v2.6
-Fix: Protección de URL de LinkedIn y deduplicación por ID.
+MERIDIAN-BDR v2.7
+Agente de prospección automatizado con menú de comandos completo.
 """
 
 import os
@@ -28,16 +28,12 @@ def get_config(sheets):
     try:
         icp = sheets.read_range("Config!B2")
         config['icp'] = icp[0][0] if icp and icp[0] else ""
-        
         queries = sheets.read_range("Config!B3")
         config['research_queries'] = queries[0][0] if queries and queries[0] else "{company} importador México"
-        
         url = sheets.read_range("Config!B4")
         config['sales_nav_url'] = url[0][0] if url and url[0] else os.getenv("SALES_NAV_LIST_URL")
-        
         max_pages = sheets.read_range("Config!B5")
         config['max_pages'] = int(max_pages[0][0]) if max_pages and max_pages[0] else 3
-        
         max_leads = sheets.read_range("Config!B6")
         config['max_leads_day'] = int(max_leads[0][0]) if max_leads and max_leads[0] else 50
     except:
@@ -59,7 +55,6 @@ def scrape_and_save():
     scraper = MeridianScraper()
     brain = MeridianBrain()
     
-    # Lectura de IDs para deduplicar (Columna A)
     existing_data = sheets.read_range("Leads!A2:A") 
     existing_ids = set(row[0] for row in existing_data if row)
     
@@ -106,11 +101,9 @@ def research_and_evaluate():
     researcher = CompanyResearcherAPI()
     brain = MeridianBrain()
     
-    # Leemos hasta columna L (Status) para filtrar, pero necesitamos K (URL)
     leads = sheets.read_range("Leads!A2:L500")
     if not leads: return [], 0, 0
     
-    # Filtramos pendientes (Columna L es índice 11)
     pending_indices = [i for i, r in enumerate(leads) if len(r) > 11 and "Pendiente" in r[11]]
     print(f"📊 Pendientes: {len(pending_indices)}")
     
@@ -120,19 +113,15 @@ def research_and_evaluate():
         time.sleep(1)
         row = leads[i]
         
-        # Recuperamos datos, incluyendo la URL de LinkedIn original (Columna K / indice 10)
+        if len(row) < 5: continue
         name, role, company = row[2], row[3], row[4]
-        original_linkedin_url = row[10] if len(row) > 10 else "" 
+        # Recuperar URL original (Columna K, indice 10)
+        original_linkedin_url = row[10] if len(row) > 10 else ""
         
         print(f"\n🔍 Analizando: {company}")
         
-        # Research
         import_info, serper_urls = researcher.search_import_data(company, config['research_queries'])
-        
-        # Concatenamos la info de importación con las URLs de Serper para la columna J
         full_info_text = f"{import_info}\n\nFuentes:\n" + "\n".join(serper_urls[:2])
-        
-        # Evaluar
         full_profile = f"Nombre: {name}\nCargo: {role}\nEmpresa: {company}\nINFO:{import_info}"
         time.sleep(1)
         
@@ -145,18 +134,14 @@ def research_and_evaluate():
                 if score >= 70: 
                     qualified.append({'name': name, 'role': role, 'company': company, 'score': score, 'reason': reason})
 
-                # ACTUALIZACIÓN (FIX): 
-                # Escribimos en G, H, I, J, K, L.
-                # En 'K' volvemos a escribir 'original_linkedin_url' para no perderla.
-                # En 'J' ponemos la info + las urls de serper.
-                
                 row_num = i + 2
+                # Escribimos G..L preservando K (URL original)
                 sheets.update_range(f"Leads!G{row_num}:L{row_num}", [[
                     score, 
                     "✅" if fit else "❌", 
                     reason[:200], 
-                    full_info_text[:900], # Columna J: Info + Sources
-                    original_linkedin_url, # Columna K: PROTEGIDA (No sobrescribir con serper)
+                    full_info_text[:900], 
+                    original_linkedin_url, # PROTEGIDA
                     status
                 ]])
                 print(f"   Score: {score}")
@@ -178,6 +163,23 @@ def run_full():
     q, t, d = research_and_evaluate()
     if t > 0: send_notification(q, t, d)
 
+# === MENÚ DE COMANDOS RESTAURADO ===
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "full": run_full()
-    else: print("Uso: python main.py full")
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1].lower()
+        if cmd == "full": run_full()
+        elif cmd == "scrape": scrape_and_save()
+        elif cmd == "research":
+            q, t, d = research_and_evaluate()
+            if t > 0: send_notification(q, t, d)
+        elif cmd == "test-email":
+            # Invocamos la prueba del notificador
+            from src.notifier import test_email
+            test_email()
+        elif cmd == "status":
+            print("Usa el comando status original si lo necesitas.")
+        else:
+            print(f"Comando desconocido: {cmd}")
+            print("Uso: python main.py [full | scrape | research | test-email]")
+    else:
+        print("Uso: python main.py [full | scrape | research | test-email]")
